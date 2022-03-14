@@ -30,7 +30,6 @@ class OPTYPE(IntEnum):
 
     LN = 9
     EMBED = 10
-
 def _get_module_type(module):
     if isinstance( module, TORCH_CONV ):
         if module.groups>1:
@@ -339,7 +338,9 @@ class DependencyGraph(object):
 
     def build_dependency( self, 
         model:torch.nn.Module, 
-        example_inputs: typing.Union[torch.Tensor, typing.Sequence],
+        inputs: typing.Union[torch.Tensor, typing.Sequence],
+        model_args: list=[],
+        model_kwargs: dict={},
         pruning_dim: int=1,
         output_transform:typing.Callable=None, 
         verbose:bool=True ):
@@ -347,7 +348,9 @@ class DependencyGraph(object):
 
         Parameters:
             model (class): the model to be pruned.
-            example_inputs (torch.Tensor or List): dummy inputs for the model.
+            inputs (torch.Tensor or List): dummy inputs for the model.
+            model_args (list): model args if needed.
+            model_kwargs (dict): model kwargs if needed.
             output_transform (Callable): A function to transform network outputs.
             verbose (Callable): verbose mode.
         """
@@ -356,9 +359,14 @@ class DependencyGraph(object):
         # get module name
         self._module_to_name = { module: name for (name, module) in model.named_modules() }
         if pruning_dim >= 0:
-            pruning_dim = pruning_dim - len(example_inputs.size())
+            if isinstance(inputs, (list, tuple)):
+                pruning_dim = pruning_dim - len(inputs[0].size())
+            elif isinstance(inputs, torch.Tensor):
+                pruning_dim = pruning_dim - len(inputs.size())
+            else:
+                raise NotImplementedError
         # build dependency graph
-        self.module_to_node = self._obtain_forward_graph( model, example_inputs, output_transform=output_transform, pruning_dim=pruning_dim)
+        self.module_to_node = self._obtain_forward_graph( model, inputs, model_args, model_kwargs, output_transform=output_transform, pruning_dim=pruning_dim)
         self._build_dependency(self.module_to_node)
         self.update_index()
         return self
@@ -451,7 +459,7 @@ class DependencyGraph(object):
                     dep = Dependency( trigger=trigger, handler=handler, broken_node=out_node)
                     node.dependencies.append( dep )
     
-    def _obtain_forward_graph(self, model, example_inputs, output_transform, pruning_dim):
+    def _obtain_forward_graph(self, model, inputs, model_args, model_kwargs, output_transform, pruning_dim):
         #module_to_node = { m: Node( m ) for m in model.modules() if isinstance( m, self.PRUNABLE_MODULES ) }
         model.eval().cpu()
         # Get grad_fn from prunable modules
@@ -467,12 +475,7 @@ class DependencyGraph(object):
         
         hooks = [m.register_forward_hook(_record_module_grad_fn) for m in model.modules() if isinstance( m, tuple(self.PRUNABLE_MODULES )) ]
         
-        if isinstance(example_inputs, (tuple, list)):
-            out = model(*example_inputs)
-        elif isinstance(example_inputs, dict):
-            out = model(**example_inputs)
-        elif isinstance(example_inputs, torch.Tensor):
-            out = model(example_inputs)
+        out = model(inputs, *model_args, **model_kwargs)
 
         for hook in hooks:
             hook.remove()
@@ -635,5 +638,5 @@ def flatten_as_list(obj):
             flattened_list.extend( flatten_as_list(sub_obj) )
         return flattened_list
     else:
-        return obj
+        return []
     
